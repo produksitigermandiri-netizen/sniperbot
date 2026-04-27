@@ -1,0 +1,1114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>APEX SNIPER — Paper Trading (Real Data)</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:#080B14; --surface:#0D1121; --card:#111827; --card2:#141C2E;
+  --i6:#4f46e5; --i5:#6366f1; --i4:#818cf8; --i3:#a5b4fc;
+  --g:#10b981; --gd:#064e3b;
+  --r:#ef4444; --rd:#450a0a;
+  --y:#f59e0b; --yd:#451a03;
+  --t1:#e2e8f0; --t2:#94a3b8; --tm:#475569;
+  --b:rgba(99,102,241,0.15); --bb:rgba(99,102,241,0.4);
+  --glow:0 0 20px rgba(99,102,241,0.25);
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--t1);font-family:'Syne',sans-serif;min-height:100vh;overflow-x:hidden}
+body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(rgba(99,102,241,0.03) 1px,transparent 1px),linear-gradient(90deg,rgba(99,102,241,0.03) 1px,transparent 1px);background-size:40px 40px;pointer-events:none;z-index:0}
+
+/* BANNER */
+.banner{background:linear-gradient(90deg,rgba(16,185,129,0.12),rgba(16,185,129,0.06),rgba(16,185,129,0.12));border-bottom:1px solid rgba(16,185,129,0.25);padding:6px 24px;display:flex;align-items:center;justify-content:space-between;font-family:'Space Mono',monospace;font-size:10px;position:sticky;top:0;z-index:200;backdrop-filter:blur(12px)}
+.banner-left{display:flex;align-items:center;gap:8px;color:var(--g);font-weight:700;letter-spacing:0.1em}
+.live-dot{width:7px;height:7px;border-radius:50%;background:var(--g);animation:ldot 1.2s infinite}
+@keyframes ldot{0%,100%{box-shadow:0 0 0 0 rgba(16,185,129,0.5)}50%{box-shadow:0 0 0 5px rgba(16,185,129,0)}}
+.banner-mid{color:rgba(16,185,129,0.6);font-size:9px}
+.api-status{display:flex;align-items:center;gap:6px;font-size:10px}
+.api-ok{color:var(--g)}.api-err{color:var(--r)}.api-wait{color:var(--y)}
+
+/* TOPBAR */
+.topbar{display:flex;align-items:center;justify-content:space-between;padding:0 24px;height:52px;background:rgba(13,17,33,0.95);border-bottom:1px solid var(--b);position:sticky;top:32px;z-index:100;backdrop-filter:blur(12px)}
+.logo{display:flex;align-items:center;gap:10px;font-size:14px;font-weight:800;letter-spacing:0.15em;text-transform:uppercase}
+.logo-icon{width:26px;height:26px;background:linear-gradient(135deg,var(--i6),var(--i4));border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:13px;box-shadow:var(--glow)}
+.paper-tag{font-size:9px;padding:2px 7px;border-radius:99px;background:rgba(16,185,129,0.12);border:1px solid rgba(16,185,129,0.3);color:var(--g);letter-spacing:0.08em}
+
+.topbar-mid{display:flex;align-items:center;gap:16px}
+.counter-pill{display:flex;align-items:center;gap:6px;background:var(--card);border:1px solid var(--b);border-radius:8px;padding:5px 12px;font-family:'Space Mono',monospace;font-size:10px;color:var(--tm)}
+.counter-pill span{color:var(--i4);font-weight:700}
+
+.btn-sm{padding:5px 12px;border-radius:7px;border:1px solid var(--b);background:transparent;color:var(--t2);font-family:'Space Mono',monospace;font-size:10px;cursor:pointer;transition:all 0.2s}
+.btn-sm:hover{border-color:var(--bb);color:var(--i4)}
+.btn-primary{padding:6px 14px;border-radius:8px;border:none;background:linear-gradient(135deg,var(--i6),var(--i5));color:white;font-family:'Syne',sans-serif;font-size:11px;font-weight:700;cursor:pointer;transition:all 0.2s;box-shadow:0 0 12px rgba(99,102,241,0.3)}
+.btn-primary:hover{box-shadow:0 0 24px rgba(99,102,241,0.5);transform:translateY(-1px)}
+.btn-pause{padding:6px 14px;border-radius:8px;border:1px solid rgba(245,158,11,0.3);background:rgba(245,158,11,0.08);color:var(--y);font-family:'Syne',sans-serif;font-size:11px;font-weight:700;cursor:pointer;transition:all 0.2s}
+
+/* STATS */
+.stats-row{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;padding:14px 24px}
+.stat-card{background:var(--card);border:1px solid var(--b);border-radius:12px;padding:14px 16px;position:relative;overflow:hidden;transition:border-color 0.2s}
+.stat-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent,var(--i6),transparent)}
+.stat-card.green-top::before{background:linear-gradient(90deg,transparent,var(--g),transparent)}
+.stat-label{font-size:9px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:var(--tm);margin-bottom:6px}
+.stat-val{font-family:'Space Mono',monospace;font-size:18px;font-weight:700;color:var(--t1)}
+.stat-val.g{color:var(--g)}.stat-val.r{color:var(--r)}.stat-val.i{color:var(--i4)}.stat-val.y{color:var(--y)}
+.stat-sub{font-family:'Space Mono',monospace;font-size:9px;color:var(--tm);margin-top:3px}
+
+/* MAIN GRID */
+.main{display:grid;grid-template-columns:1fr 360px;gap:12px;padding:0 24px 24px}
+.left{display:flex;flex-direction:column;gap:12px}
+.right{display:flex;flex-direction:column;gap:12px}
+
+/* PANEL */
+.panel{background:var(--card);border:1px solid var(--b);border-radius:14px;overflow:hidden}
+.panel-head{display:flex;align-items:center;justify-content:space-between;padding:12px 18px;border-bottom:1px solid var(--b);background:var(--card2)}
+.panel-title{font-size:11px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:var(--i3);display:flex;align-items:center;gap:7px}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--i5);box-shadow:0 0 5px var(--i5)}
+.dot.g{background:var(--g);box-shadow:0 0 5px var(--g)}.dot.y{background:var(--y);box-shadow:0 0 5px var(--y)}.dot.r{background:var(--r);box-shadow:0 0 5px var(--r)}
+.badge{font-family:'Space Mono',monospace;font-size:9px;padding:2px 7px;border-radius:99px;background:rgba(99,102,241,0.12);border:1px solid var(--bb);color:var(--i4)}
+.badge.g{background:rgba(16,185,129,0.1);border-color:rgba(16,185,129,0.3);color:var(--g)}
+.badge.r{background:rgba(239,68,68,0.1);border-color:rgba(239,68,68,0.3);color:var(--r)}
+.badge.y{background:rgba(245,158,11,0.1);border-color:rgba(245,158,11,0.3);color:var(--y)}
+
+/* TABLE */
+.tbl{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:11px}
+thead th{padding:8px 14px;text-align:left;font-size:9px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:var(--tm);background:var(--card2);border-bottom:1px solid var(--b);white-space:nowrap}
+tbody tr{border-bottom:1px solid rgba(99,102,241,0.05);transition:background 0.15s}
+tbody tr:hover{background:rgba(99,102,241,0.04)}
+tbody tr:last-child{border-bottom:none}
+tbody td{padding:9px 14px;font-family:'Space Mono',monospace;font-size:10px;white-space:nowrap;color:var(--t2)}
+.tc{display:flex;align-items:center;gap:8px}
+.tav{width:26px;height:26px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;flex-shrink:0;border:1px solid rgba(255,255,255,0.07)}
+.tn{color:var(--t1);font-weight:700;font-size:11px}.td{color:var(--tm);font-size:9px;margin-top:1px}
+.pb{display:inline-flex;align-items:center;padding:2px 6px;border-radius:5px;font-size:10px;font-weight:700}
+.pb.p{background:var(--gd);color:var(--g)}.pb.n{background:var(--rd);color:var(--r)}
+.sb{display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border-radius:5px;font-size:9px}
+.sb.hold{background:rgba(99,102,241,0.12);color:var(--i4);border:1px solid rgba(99,102,241,0.25)}
+.sb.tp{background:var(--gd);color:var(--g)}.sb.sl{background:var(--rd);color:var(--r)}.sb.trail{background:var(--yd);color:var(--y)}
+.exit-btn{padding:3px 8px;border-radius:5px;border:1px solid rgba(239,68,68,0.3);background:transparent;color:var(--r);font-family:'Space Mono',monospace;font-size:9px;cursor:pointer;transition:all 0.2s}
+.exit-btn:hover{background:var(--rd)}
+
+/* FEED */
+.feed{max-height:340px;overflow-y:auto}
+.fi{display:flex;align-items:center;gap:10px;padding:9px 18px;border-bottom:1px solid rgba(99,102,241,0.05);cursor:pointer;transition:background 0.15s;position:relative}
+.fi:hover{background:rgba(99,102,241,0.04)}
+.fi.new{animation:sIn 0.4s ease-out}
+@keyframes sIn{from{opacity:0;transform:translateX(-8px);background:rgba(99,102,241,0.15)}to{opacity:1;transform:none}}
+.fi.fired{animation:fFire 0.7s ease-out}
+@keyframes fFire{0%{background:rgba(16,185,129,0.2)}100%{background:transparent}}
+.fav{width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0;border:1px solid rgba(255,255,255,0.06)}
+.fi-info{flex:1;min-width:0}
+.fi-name{font-size:12px;font-weight:700;color:var(--t1);display:flex;align-items:center;gap:5px}
+.fi-meta{font-family:'Space Mono',monospace;font-size:9px;color:var(--tm);margin-top:2px}
+.age-bar{width:100%;height:2px;background:var(--surface);border-radius:99px;margin-top:3px;overflow:hidden}
+.ab-fill{height:100%;border-radius:99px;transition:width 0.5s}
+.ab-fill.safe{background:var(--g)}.ab-fill.warn{background:var(--y)}.ab-fill.late{background:var(--r)}
+.dex-tag{font-size:9px;padding:2px 6px;border-radius:4px;background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.2);color:var(--i4);font-weight:700;flex-shrink:0}
+.dex-tag.excluded{background:rgba(239,68,68,0.08);border-color:rgba(239,68,68,0.2);color:var(--r)}
+.fr{text-align:right;flex-shrink:0}
+.fr-liq{font-family:'Space Mono',monospace;font-size:11px;color:var(--i4);font-weight:700}
+.fr-age{font-family:'Space Mono',monospace;font-size:9px;margin-top:2px}
+.snipe-btn{padding:4px 9px;border-radius:6px;border:1px solid var(--bb);background:rgba(99,102,241,0.08);color:var(--i4);font-family:'Space Mono',monospace;font-size:9px;cursor:pointer;transition:all 0.2s;flex-shrink:0}
+.snipe-btn:hover,.snipe-btn.auto{background:var(--i6);color:white;box-shadow:var(--glow)}
+.snipe-btn.disabled{opacity:0.3;cursor:not-allowed;pointer-events:none}
+
+/* SETTINGS */
+.sb-body{padding:14px 18px;display:flex;flex-direction:column;gap:15px}
+.sg{display:flex;flex-direction:column;gap:8px}
+.sg-label{font-size:9px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:var(--tm);padding-bottom:3px;border-bottom:1px solid var(--b)}
+.sr{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.sl-label{font-size:11px;color:var(--t2)}
+.si{background:var(--surface);border:1px solid var(--b);border-radius:7px;padding:5px 10px;font-family:'Space Mono',monospace;font-size:11px;color:var(--i3);width:80px;text-align:right;outline:none;transition:border-color 0.2s}
+.si:focus{border-color:var(--i6)}
+.tgl{width:34px;height:18px;border-radius:99px;position:relative;cursor:pointer;transition:background 0.2s;flex-shrink:0}
+.tgl.on{background:var(--i6)}.tgl.off{background:var(--surface);border:1px solid var(--b)}
+.tgl-t{position:absolute;top:2px;width:14px;height:14px;border-radius:50%;background:white;transition:left 0.2s;box-shadow:0 1px 3px rgba(0,0,0,0.3)}
+.tgl.on .tgl-t{left:18px}.tgl.off .tgl-t{left:2px}
+.range-row{display:flex;flex-direction:column;gap:5px}
+.range-head{display:flex;justify-content:space-between;align-items:center}
+.range-label{font-size:11px;color:var(--t2)}
+.range-val{font-family:'Space Mono',monospace;font-size:11px;color:var(--i4)}
+input[type=range]{width:100%;height:3px;border-radius:99px;outline:none;background:linear-gradient(90deg,var(--i6) var(--pct,50%),var(--surface) var(--pct,50%));border:none;cursor:pointer;-webkit-appearance:none}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;height:13px;border-radius:50%;background:var(--i4);box-shadow:0 0 5px rgba(99,102,241,0.5);cursor:pointer;border:2px solid var(--bg)}
+.mode-btns{display:flex;gap:3px}
+.mb{flex:1;padding:5px 3px;border-radius:6px;border:1px solid var(--b);background:transparent;color:var(--tm);font-family:'Syne',sans-serif;font-size:9px;font-weight:700;cursor:pointer;transition:all 0.2s;text-align:center}
+.mb:hover{border-color:var(--bb);color:var(--i4)}
+.mb.active{background:rgba(99,102,241,0.13);border-color:var(--bb);color:var(--i3)}
+.mb.aggro.active{background:rgba(239,68,68,0.1);border-color:rgba(239,68,68,0.3);color:var(--r)}
+
+/* AUTO BUY PANEL */
+.abp{background:linear-gradient(135deg,rgba(99,102,241,0.1),rgba(99,102,241,0.04));border:1px solid var(--bb);border-radius:10px;padding:12px;transition:all 0.3s}
+.abp.off{opacity:0.5;border-color:var(--b)}
+.abp.firing{animation:abFire 0.6s ease-out}
+@keyframes abFire{0%{box-shadow:0 0 30px rgba(99,102,241,0.5)}100%{box-shadow:none}}
+.abp-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.abp-title{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:700;color:var(--t1)}
+.abp-icon{font-size:18px;animation:robo 3s ease-in-out infinite}
+@keyframes robo{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}
+.cond{display:flex;flex-direction:column;gap:4px}
+.cr{display:flex;align-items:center;gap:6px;font-family:'Space Mono',monospace;font-size:9px;color:var(--tm)}
+.cr .ok{color:var(--g)}.cr .cv{color:var(--i4)}
+
+/* LOG */
+.log{max-height:250px;overflow-y:auto;padding:6px 0}
+.li{display:flex;align-items:flex-start;gap:8px;padding:7px 18px;border-bottom:1px solid rgba(99,102,241,0.05)}
+.li:last-child{border-bottom:none}
+.li-icon{width:20px;height:20px;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:10px;flex-shrink:0;margin-top:1px}
+.li-icon.tp{background:var(--gd)}.li-icon.entry{background:rgba(99,102,241,0.15)}.li-icon.warn{background:var(--yd)}.li-icon.sl{background:var(--rd)}.li-icon.sell{background:rgba(16,185,129,0.1)}.li-icon.info{background:rgba(99,102,241,0.1)}
+.li-text{font-size:10px;color:var(--t2);line-height:1.5}
+.li-text strong{color:var(--t1)}
+.li-time{font-family:'Space Mono',monospace;font-size:9px;color:var(--tm);margin-top:1px}
+
+/* CHART */
+.chart-wrap{padding:14px 18px}
+
+/* TABS */
+.tab-bar{display:flex;border-bottom:1px solid var(--b)}
+.tab{padding:9px 16px;font-size:10px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--tm);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;transition:all 0.2s}
+.tab:hover{color:var(--i4)}
+.tab.active{color:var(--i3);border-bottom-color:var(--i5)}
+.tab-c{display:none}.tab-c.active{display:block}
+
+/* SCORE */
+.score-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:14px 18px}
+.sc{background:var(--surface);border:1px solid var(--b);border-radius:8px;padding:10px 12px}
+.sc-label{font-size:9px;letter-spacing:0.1em;text-transform:uppercase;color:var(--tm);margin-bottom:4px}
+.sc-val{font-family:'Space Mono',monospace;font-size:15px;font-weight:700}
+
+/* POLLING INDICATOR */
+.poll-row{display:flex;align-items:center;justify-content:space-between;padding:8px 18px;background:rgba(99,102,241,0.04);border-top:1px solid var(--b)}
+.poll-label{font-family:'Space Mono',monospace;font-size:9px;color:var(--tm)}
+.poll-bar{flex:1;height:2px;background:var(--surface);border-radius:99px;margin:0 10px;overflow:hidden}
+.poll-fill{height:100%;background:linear-gradient(90deg,var(--i6),var(--i4));border-radius:99px;transition:width 1s linear}
+.poll-next{font-family:'Space Mono',monospace;font-size:9px;color:var(--i4)}
+
+::-webkit-scrollbar{width:3px;height:3px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--i6);border-radius:99px}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0.3}}
+.blink{animation:blink 1.5s infinite}
+@keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.au{animation:fadeUp 0.4s ease-out both}
+</style>
+</head>
+<body>
+
+<!-- BANNER -->
+<div class="banner">
+  <div class="banner-left"><div class="live-dot"></div>PAPER TRADING — REAL MARKET DATA</div>
+  <div class="banner-mid">💰 Virtual wallet — no real funds. Harga & token dari DEXScreener API.</div>
+  <div class="api-status">
+    DEXScreener: <span id="apiStatusText" class="api-wait">Connecting...</span>
+    &nbsp;|&nbsp; Last fetch: <span id="lastFetch" style="color:var(--tm)">—</span>
+  </div>
+</div>
+
+<!-- TOPBAR -->
+<header class="topbar">
+  <div class="logo">
+    <div class="logo-icon">⚡</div>
+    APEX <span style="color:var(--i4)">SNIPER</span>
+    <span class="paper-tag">PAPER LIVE</span>
+  </div>
+
+  <div class="topbar-mid">
+    <div class="counter-pill">Scanned <span id="topScanned">0</span></div>
+    <div class="counter-pill">Passed <span id="topPassed">0</span></div>
+    <div class="counter-pill">Trades <span id="topTrades">0</span></div>
+    <div class="counter-pill">Wallet <span id="topWallet">10.000</span> SOL</div>
+  </div>
+
+  <div style="display:flex;gap:8px;align-items:center">
+    <button class="btn-sm" onclick="resetPaper()">↺ RESET</button>
+    <button class="btn-sm" id="pauseBtn" onclick="togglePause()">⏸ PAUSE</button>
+    <button class="btn-primary" onclick="forceFetch()">⚡ FETCH NOW</button>
+  </div>
+</header>
+
+<!-- STATS -->
+<div class="stats-row">
+  <div class="stat-card au" style="animation-delay:0.05s">
+    <div class="stat-label">Paper PnL (SOL)</div>
+    <div class="stat-val g" id="sPnl">+0.000</div>
+    <div class="stat-sub" id="sPnlUsd">≈ $0.00</div>
+  </div>
+  <div class="stat-card au" style="animation-delay:0.08s">
+    <div class="stat-label">Win Rate</div>
+    <div class="stat-val i" id="sWr">—</div>
+    <div class="stat-sub" id="sWrSub">0W / 0L</div>
+  </div>
+  <div class="stat-card au" style="animation-delay:0.11s">
+    <div class="stat-label">Open Positions</div>
+    <div class="stat-val" id="sPos">0</div>
+    <div class="stat-sub">max <span id="sMaxPos">5</span> concurrent</div>
+  </div>
+  <div class="stat-card au" style="animation-delay:0.14s">
+    <div class="stat-label">Total Trades</div>
+    <div class="stat-val i" id="sTrades">0</div>
+    <div class="stat-sub" id="sTradesSub">0 auto / 0 manual</div>
+  </div>
+  <div class="stat-card au" style="animation-delay:0.17s">
+    <div class="stat-label">Tokens Scanned</div>
+    <div class="stat-val i" id="sScanned">0</div>
+    <div class="stat-sub" id="sFilterSub">0 passed filter</div>
+  </div>
+  <div class="stat-card green-top au" style="animation-delay:0.2s">
+    <div class="stat-label">Virtual Wallet</div>
+    <div class="stat-val y" id="sWallet">10.000</div>
+    <div class="stat-sub">SOL (paper)</div>
+  </div>
+</div>
+
+<!-- MAIN -->
+<div class="main">
+<div class="left">
+
+  <!-- POSITIONS -->
+  <div class="panel au" style="animation-delay:0.25s">
+    <div class="panel-head">
+      <div class="panel-title"><div class="dot"></div> Open Positions</div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <div class="badge" id="posBadge">0 OPEN</div>
+        <div style="font-family:'Space Mono',monospace;font-size:9px;color:var(--tm)">
+          TP: <span style="color:var(--g)" id="tpLabel">3×</span> &nbsp; SL: <span style="color:var(--r)" id="slLabel">-30%</span>
+        </div>
+      </div>
+    </div>
+    <div class="tab-bar">
+      <div class="tab active" onclick="switchTab('open',this)">Open</div>
+      <div class="tab" onclick="switchTab('hist',this)">History</div>
+      <div class="tab" onclick="switchTab('stats',this)">Stats</div>
+    </div>
+    <div class="tab-c active" id="tab-open">
+      <div class="tbl">
+        <table>
+          <thead><tr><th>Token</th><th>Entry $</th><th>Current $</th><th>Size</th><th>PnL</th><th>TP/SL</th><th>Status</th><th>Action</th></tr></thead>
+          <tbody id="posTBody"><tr><td colspan="8" style="text-align:center;padding:24px;color:var(--tm);font-size:11px">Menunggu pair baru dari DEXScreener...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="tab-c" id="tab-hist">
+      <div class="tbl">
+        <table>
+          <thead><tr><th>Token</th><th>Entry $</th><th>Exit $</th><th>Size</th><th>PnL SOL</th><th>Reason</th><th>Dur</th></tr></thead>
+          <tbody id="histTBody"><tr><td colspan="7" style="text-align:center;padding:24px;color:var(--tm);font-size:11px">Belum ada trade closed.</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="tab-c" id="tab-stats">
+      <div class="score-grid">
+        <div class="sc"><div class="sc-label">Best Trade</div><div class="sc-val g" id="stBest">—</div></div>
+        <div class="sc"><div class="sc-label">Worst Trade</div><div class="sc-val r" id="stWorst">—</div></div>
+        <div class="sc"><div class="sc-label">Avg Win</div><div class="sc-val g" id="stAvgW">—</div></div>
+        <div class="sc"><div class="sc-label">Avg Loss</div><div class="sc-val r" id="stAvgL">—</div></div>
+        <div class="sc"><div class="sc-label">Skipped (filter)</div><div class="sc-val" id="stSkip">0</div></div>
+        <div class="sc"><div class="sc-label">Excluded (pump.fun)</div><div class="sc-val y" id="stExcl">0</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- FEED -->
+  <div class="panel au" style="animation-delay:0.3s">
+    <div class="panel-head">
+      <div class="panel-title"><div class="dot g"></div> Real Pair Detection — DEXScreener</div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <div style="font-family:'Space Mono',monospace;font-size:9px;color:var(--tm)">
+          Liq ≥ <span style="color:var(--i4)" id="minLiqLabel">$30K</span> &nbsp; Age ≤ <span style="color:var(--i4)" id="maxAgeLabel">2min</span>
+        </div>
+        <div class="badge g" id="feedBadge">POLLING</div>
+      </div>
+    </div>
+    <div class="feed" id="feedList">
+      <div style="text-align:center;padding:32px;color:var(--tm);font-family:'Space Mono',monospace;font-size:11px">
+        Fetching real pairs dari DEXScreener...<br>
+        <span style="font-size:9px;margin-top:8px;display:block;color:var(--i4)">Polling tiap 45 detik</span>
+      </div>
+    </div>
+    <!-- POLLING BAR -->
+    <div class="poll-row">
+      <div class="poll-label">Next fetch:</div>
+      <div class="poll-bar"><div class="poll-fill" id="pollFill" style="width:100%"></div></div>
+      <div class="poll-next" id="pollNext">45s</div>
+    </div>
+  </div>
+
+  <!-- PNL CHART -->
+  <div class="panel au" style="animation-delay:0.35s">
+    <div class="panel-head">
+      <div class="panel-title"><div class="dot"></div> PnL Curve (paper)</div>
+      <div style="font-family:'Space Mono',monospace;font-size:9px;color:var(--tm)" id="chartInfo">0 closed trades</div>
+    </div>
+    <div class="chart-wrap">
+      <svg id="pnlSvg" viewBox="0 0 580 100" preserveAspectRatio="none" width="100%" height="100">
+        <defs>
+          <linearGradient id="cg" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#6366f1" stop-opacity="0.35"/>
+            <stop offset="100%" stop-color="#6366f1" stop-opacity="0"/>
+          </linearGradient>
+          <filter id="gf"><feGaussianBlur stdDeviation="1.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+        </defs>
+        <line x1="0" y1="25" x2="580" y2="25" stroke="rgba(99,102,241,0.08)" stroke-width="1"/>
+        <line x1="0" y1="50" x2="580" y2="50" stroke="rgba(99,102,241,0.08)" stroke-width="1"/>
+        <line x1="0" y1="75" x2="580" y2="75" stroke="rgba(99,102,241,0.08)" stroke-width="1"/>
+        <text x="2" y="97" fill="#475569" font-size="8" font-family="Space Mono">0</text>
+        <path id="cFill" d="" fill="url(#cg)"/>
+        <path id="cLine" d="" fill="none" stroke="#6366f1" stroke-width="2" filter="url(#gf)"/>
+        <circle id="cDot" cx="0" cy="50" r="3.5" fill="#818cf8" filter="url(#gf)" opacity="0"/>
+      </svg>
+    </div>
+  </div>
+
+</div>
+
+<!-- RIGHT COL -->
+<div class="right">
+
+  <!-- SETTINGS -->
+  <div class="panel au" style="animation-delay:0.25s">
+    <div class="panel-head">
+      <div class="panel-title"><div class="dot"></div> Config</div>
+      <div class="badge g">REAL DATA</div>
+    </div>
+    <div class="sb-body">
+
+      <div class="sg">
+        <div class="sg-label">Exit Strategy</div>
+        <div class="sr">
+          <div class="sl-label">Take Profit</div>
+          <div style="display:flex;align-items:center;gap:4px">
+            <input class="si" id="tpInput" value="3" oninput="updateTPSL()">
+            <span style="font-size:10px;color:var(--tm)">×</span>
+          </div>
+        </div>
+        <div class="sr">
+          <div class="sl-label">Stop Loss</div>
+          <div style="display:flex;align-items:center;gap:4px">
+            <input class="si" id="slInput" value="30" oninput="updateTPSL()">
+            <span style="font-size:10px;color:var(--tm)">%</span>
+          </div>
+        </div>
+        <div class="sr">
+          <div class="sl-label">Trailing Stop</div>
+          <div class="tgl on" id="trailTgl" onclick="toggl(this)"><div class="tgl-t"></div></div>
+        </div>
+      </div>
+
+      <div class="sg">
+        <div class="sg-label">Position</div>
+        <div class="sr">
+          <div class="sl-label">Size per trade</div>
+          <div style="display:flex;align-items:center;gap:4px">
+            <input class="si" id="sizeInput" value="0.3">
+            <span style="font-size:10px;color:var(--tm)">SOL</span>
+          </div>
+        </div>
+        <div class="sr">
+          <div class="sl-label">Max concurrent</div>
+          <input class="si" id="maxPosInput" value="5" oninput="cfg.maxPos=parseInt(this.value)||5;document.getElementById('sMaxPos').textContent=cfg.maxPos">
+        </div>
+      </div>
+
+      <div class="sg">
+        <div class="sg-label">Filter</div>
+        <div class="sr">
+          <div class="sl-label">Min Liquidity</div>
+          <div style="display:flex;align-items:center;gap:4px">
+            <input class="si" id="minLiqInput" value="30" oninput="updateFilter()">
+            <span style="font-size:10px;color:var(--tm)">K USD</span>
+          </div>
+        </div>
+        <div class="range-row">
+          <div class="range-head">
+            <div class="range-label">Max Token Age</div>
+            <div style="display:flex;align-items:center;gap:5px">
+              <div class="range-val" id="ageVal">2 min</div>
+              <div id="ageTag" style="font-family:'Space Mono',monospace;font-size:8px;padding:1px 5px;border-radius:99px;background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.25);color:var(--g)">EARLY</div>
+            </div>
+          </div>
+          <input type="range" id="ageSlider" min="30" max="600" value="120" oninput="updateAge(this)">
+          <div style="display:flex;justify-content:space-between;margin-top:3px">
+            <span style="font-family:'Space Mono',monospace;font-size:8px;color:var(--tm)">30s</span>
+            <span style="font-family:'Space Mono',monospace;font-size:8px;color:var(--tm)">5min</span>
+            <span style="font-family:'Space Mono',monospace;font-size:8px;color:var(--tm)">10min</span>
+          </div>
+        </div>
+        <div class="sr">
+          <div class="sl-label">Exclude Pump.fun</div>
+          <div class="tgl on" id="exclPumpTgl" onclick="toggl(this)"><div class="tgl-t"></div></div>
+        </div>
+        <div class="sr">
+          <div class="sl-label">Solana only</div>
+          <div class="tgl on" style="opacity:0.5;cursor:not-allowed"><div class="tgl-t" style="left:18px"></div></div>
+        </div>
+      </div>
+
+      <!-- AUTO BUY -->
+      <div class="sg">
+        <div class="sg-label">Auto Buy</div>
+        <div class="abp" id="abPanel">
+          <div class="abp-head">
+            <div class="abp-title"><div class="abp-icon">🤖</div> Auto Snipe</div>
+            <div class="tgl on" id="abTgl" onclick="toggleAB(this)"><div class="tgl-t"></div></div>
+          </div>
+          <div class="cond">
+            <div class="cr"><span class="ok">✓</span> Chain = <span class="cv">Solana</span></div>
+            <div class="cr"><span class="ok">✓</span> DEX ≠ <span style="color:var(--r)">pump.fun</span></div>
+            <div class="cr"><span class="ok">✓</span> Liq ≥ <span class="cv" id="condLiq">$30K</span></div>
+            <div class="cr"><span class="ok">✓</span> Age ≤ <span class="cv" id="condAge">2 min</span></div>
+            <div class="cr"><span class="ok">✓</span> Not already in positions</div>
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-top:10px;padding-top:10px;border-top:1px solid var(--b)">
+            <div style="font-family:'Space Mono',monospace;font-size:9px;color:var(--tm)">Auto-bought</div>
+            <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--i4);font-weight:700" id="abCount">0 trades</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- DEX FILTER -->
+  <div class="panel au" style="animation-delay:0.3s">
+    <div class="panel-head">
+      <div class="panel-title"><div class="dot g"></div> DEX Whitelist</div>
+      <div class="badge">SOLANA</div>
+    </div>
+    <div style="padding:12px 18px;display:flex;flex-direction:column;gap:8px" id="dexList">
+      <!-- populated by JS -->
+    </div>
+  </div>
+
+  <!-- LOG -->
+  <div class="panel au" style="animation-delay:0.35s">
+    <div class="panel-head">
+      <div class="panel-title"><div class="dot y"></div> Event Log</div>
+      <button class="btn-sm" onclick="clearLog()" style="padding:3px 8px;font-size:9px">Clear</button>
+    </div>
+    <div class="log" id="logBody"></div>
+  </div>
+
+</div>
+</div>
+
+<!-- WALLET BAR -->
+<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 24px;background:rgba(99,102,241,0.04);border-top:1px solid var(--b)">
+  <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--tm)">
+    📡 Data: DEXScreener API &nbsp;|&nbsp; Chain: Solana &nbsp;|&nbsp;
+    Price update: <span style="color:var(--i4)">30s polling</span> &nbsp;|&nbsp;
+    Pair detection: <span style="color:var(--i4)">45s polling</span>
+  </div>
+  <div style="font-family:'Space Mono',monospace;font-size:12px;color:var(--y);font-weight:700" id="walletBar">10.000 SOL (paper)</div>
+</div>
+
+<script>
+// ══════════════════════════════════════════════════════
+//  CONFIG & STATE
+// ══════════════════════════════════════════════════════
+const DEXSCREENER = 'https://api.dexscreener.com';
+const SOL_PRICE   = 142.38;
+const POLL_PAIRS_MS   = 45000;
+const POLL_PRICE_MS   = 30000;
+
+const DEX_MAP = {
+  'raydium':     { label:'Raydium',      color:'#9945ff', on:true },
+  'meteora':     { label:'Meteora',      color:'#2dd4bf', on:true },
+  'orca':        { label:'Orca',         color:'#fbba09', on:true },
+  'pumpswap':    { label:'PumpSwap',     color:'#ec4899', on:true },
+  'pump-swap':   { label:'PumpSwap',     color:'#ec4899', on:true },
+  'meteora-dbc': { label:'Meteora DBC',  color:'#06b6d4', on:true },
+  'meteoradbc':  { label:'Meteora DBC',  color:'#06b6d4', on:true },
+  'pump-fun':    { label:'Pump.fun',     color:'#ef4444', on:false },
+  'pumpfun':     { label:'Pump.fun',     color:'#ef4444', on:false },
+};
+
+// Normalize dexId
+function normDex(id){ return id?.toLowerCase().replace(/[^a-z0-9-]/g,'') || '' }
+
+function isDexAllowed(dexId){
+  const n = normDex(dexId);
+  if(n.includes('pump') && n.includes('fun')) return false;
+  if(n.includes('pump') && n.includes('swap')) return cfg.excludePump ? false : true;
+  const info = DEX_MAP[n];
+  return info ? info.on : true; // unknown DEX allowed by default
+}
+
+const cfg = {
+  tpMult:     3,
+  slPct:      30,
+  trailOn:    true,
+  tradeSize:  0.3,
+  maxPos:     5,
+  minLiqK:    30,
+  maxAgeSec:  120,
+  autoBuy:    true,
+  excludePump:true,
+};
+
+let wallet     = 10.0;
+let positions  = [];
+let history    = [];
+let pnlCurve   = [0];
+let logs       = [];
+let feedItems  = [];
+let seenPairs  = new Set();
+
+let wins=0, losses=0, totalTrades=0, autoTrades=0, manualTrades=0;
+let scannedCount=0, filteredCount=0, skipCount=0, exclCount=0, abCount=0;
+
+let paused     = false;
+let pollTimer  = null;
+let priceTimer = null;
+let pollCountdown = POLL_PAIRS_MS/1000;
+
+// ══════════════════════════════════════════════════════
+//  API CALLS
+// ══════════════════════════════════════════════════════
+async function fetchProfiles() {
+  const res = await fetch(`${DEXSCREENER}/token-profiles/latest/v1`);
+  if(!res.ok) throw new Error('HTTP '+res.status);
+  return res.json();
+}
+
+async function fetchBoosts() {
+  const res = await fetch(`${DEXSCREENER}/token-boosts/latest/v1`);
+  if(!res.ok) throw new Error('HTTP '+res.status);
+  return res.json();
+}
+
+async function fetchPairsByToken(tokenAddress) {
+  const res = await fetch(`${DEXSCREENER}/latest/dex/tokens/${tokenAddress}`);
+  if(!res.ok) throw new Error('HTTP '+res.status);
+  const data = await res.json();
+  return data.pairs || [];
+}
+
+async function fetchPairPrice(pairAddress) {
+  const res = await fetch(`${DEXSCREENER}/latest/dex/pairs/solana/${pairAddress}`);
+  if(!res.ok) return null;
+  const data = await res.json();
+  return data.pairs?.[0] || null;
+}
+
+// ══════════════════════════════════════════════════════
+//  MAIN FETCH CYCLE
+// ══════════════════════════════════════════════════════
+async function runFetchCycle() {
+  if(paused) return;
+  setApiStatus('wait','Fetching...');
+  try {
+    // Fetch profiles + boosts in parallel
+    const [profiles, boosts] = await Promise.allSettled([fetchProfiles(), fetchBoosts()]);
+    
+    let tokens = [];
+    if(profiles.status==='fulfilled' && Array.isArray(profiles.value)){
+      tokens.push(...profiles.value.filter(t=>t.chainId==='solana'));
+    }
+    if(boosts.status==='fulfilled' && Array.isArray(boosts.value)){
+      boosts.value.filter(t=>t.chainId==='solana').forEach(b=>{
+        if(!tokens.find(t=>t.tokenAddress===b.tokenAddress)) tokens.push(b);
+      });
+    }
+
+    addLog('info','📡',`Fetched ${tokens.length} Solana tokens dari DEXScreener`);
+    setApiStatus('ok','OK');
+    document.getElementById('lastFetch').textContent = new Date().toLocaleTimeString('id-ID');
+
+    // Process each token
+    let newCount = 0;
+    for(const token of tokens.slice(0,30)) { // limit 30 to avoid rate limit
+      if(!token.tokenAddress) continue;
+      await procesToken(token);
+      newCount++;
+      await sleep(200); // throttle
+    }
+    addLog('info','✅',`Processed ${newCount} tokens — ${filteredCount} total passed filter`);
+
+  } catch(e) {
+    setApiStatus('err','Error: '+e.message);
+    addLog('warn','⚠️','API error: '+e.message);
+  }
+}
+
+async function procesToken(token) {
+  try {
+    const pairs = await fetchPairsByToken(token.tokenAddress);
+    if(!pairs.length) return;
+
+    for(const pair of pairs) {
+      if(pair.chainId !== 'solana') continue;
+      if(seenPairs.has(pair.pairAddress)) continue;
+      
+      scannedCount++;
+      const liqUsd   = pair.liquidity?.usd || 0;
+      const ageMs    = Date.now() - (pair.pairCreatedAt || Date.now());
+      const ageSec   = Math.floor(ageMs/1000);
+      const dexId    = normDex(pair.dexId);
+      const priceUsd = parseFloat(pair.priceUsd) || 0;
+      const name     = pair.baseToken?.symbol || 'UNKNOWN';
+
+      // Check excluded DEX (pump.fun)
+      if(dexId.includes('pump') && dexId.includes('fun')){
+        exclCount++;
+        continue;
+      }
+
+      // Filter checks
+      if(liqUsd < cfg.minLiqK*1000){ skipCount++; continue; }
+      if(ageSec > cfg.maxAgeSec){ skipCount++; continue; }
+      if(!isDexAllowed(dexId)){ skipCount++; continue; }
+
+      // Passed filter!
+      seenPairs.add(pair.pairAddress);
+      filteredCount++;
+
+      const dexInfo  = DEX_MAP[dexId] || { label:pair.dexId||'Unknown', color:'#6366f1' };
+      const item = {
+        pairAddress: pair.pairAddress,
+        tokenAddress: token.tokenAddress,
+        name,
+        dexId,
+        dexLabel: dexInfo.label,
+        color: dexInfo.color,
+        liqUsd,
+        liqK: Math.round(liqUsd/1000),
+        ageSec,
+        priceUsd,
+        passedAt: Date.now(),
+      };
+
+      feedItems.unshift(item);
+      if(feedItems.length > 12) feedItems.pop();
+      renderFeed();
+
+      // AUTO BUY
+      if(cfg.autoBuy && positions.length < cfg.maxPos && wallet >= cfg.tradeSize && !positions.find(p=>p.pairAddress===pair.pairAddress)){
+        executeBuy(item, true);
+      }
+    }
+  } catch(e){
+    // silent fail per token
+  }
+}
+
+// ══════════════════════════════════════════════════════
+//  PRICE UPDATE CYCLE
+// ══════════════════════════════════════════════════════
+async function runPriceUpdate() {
+  if(paused || !positions.length) return;
+  for(const pos of [...positions]) {
+    try {
+      const pairData = await fetchPairPrice(pos.pairAddress);
+      if(!pairData) continue;
+      const newPrice = parseFloat(pairData.priceUsd) || pos.currentPrice;
+      pos.currentPrice = newPrice;
+      pos.liqUsd = pairData.liquidity?.usd || pos.liqUsd;
+
+      // Update PnL
+      pos.pnlPct = ((pos.currentPrice - pos.entryPrice)/pos.entryPrice)*100;
+      pos.pnlSOL = parseFloat(((pos.pnlPct/100)*pos.size).toFixed(4));
+      if(pos.currentPrice > pos.trailHigh) pos.trailHigh = pos.currentPrice;
+
+      // Exit checks
+      const trailDrop = cfg.trailOn ? ((pos.currentPrice/pos.trailHigh)-1)*100 : null;
+      if(pos.pnlPct >= (cfg.tpMult-1)*100){
+        closePosition(pos,'TP'); continue;
+      }
+      if(pos.pnlPct <= -cfg.slPct){
+        closePosition(pos,'SL'); continue;
+      }
+      if(trailDrop !== null && trailDrop <= -20 && pos.pnlPct > 30){
+        closePosition(pos,'TRAIL'); continue;
+      }
+      await sleep(300);
+    } catch(e){ /* silent */ }
+  }
+  renderPositions();
+  updateStats();
+}
+
+// ══════════════════════════════════════════════════════
+//  BUY
+// ══════════════════════════════════════════════════════
+function executeBuy(item, isAuto) {
+  if(positions.find(p=>p.pairAddress===item.pairAddress)) return;
+  if(wallet < cfg.tradeSize){ addLog('warn','⚠️','Insufficient paper wallet'); return; }
+
+  const pos = {
+    id:           Date.now()+Math.random(),
+    pairAddress:  item.pairAddress,
+    tokenAddress: item.tokenAddress,
+    name:         item.name,
+    dexLabel:     item.dexLabel,
+    color:        item.color,
+    entryPrice:   item.priceUsd,
+    currentPrice: item.priceUsd,
+    trailHigh:    item.priceUsd,
+    size:         cfg.tradeSize,
+    isAuto,
+    entryTime:    Date.now(),
+    pnlPct:       0,
+    pnlSOL:       0,
+    liqUsd:       item.liqUsd,
+  };
+
+  positions.push(pos);
+  wallet = parseFloat((wallet - cfg.tradeSize).toFixed(4));
+  totalTrades++;
+  if(isAuto){ autoTrades++; abCount++; } else { manualTrades++; }
+
+  const label = isAuto?'Auto-sniped':'Manual snipe';
+  addLog('entry','⚡',`${label} <strong>${item.name}</strong> — ${cfg.tradeSize} SOL @ $${item.priceUsd.toFixed(8)} [${item.dexLabel}]`);
+
+  document.getElementById('abPanel').classList.add('firing');
+  setTimeout(()=>document.getElementById('abPanel').classList.remove('firing'),700);
+  document.getElementById('abCount').textContent = abCount+' trades';
+  renderPositions();
+  updateStats();
+}
+
+// ══════════════════════════════════════════════════════
+//  SELL / CLOSE
+// ══════════════════════════════════════════════════════
+function closePosition(pos, reason) {
+  positions = positions.filter(p=>p.id!==pos.id);
+  const pnlSOL = parseFloat(((pos.currentPrice-pos.entryPrice)/pos.entryPrice*pos.size).toFixed(4));
+  const pnlPct = ((pos.currentPrice-pos.entryPrice)/pos.entryPrice)*100;
+  const durMs  = Date.now()-pos.entryTime;
+  const durS   = Math.floor(durMs/1000);
+  wallet = parseFloat((wallet+pos.size+pnlSOL).toFixed(4));
+  if(pnlSOL>0) wins++; else losses++;
+  pnlCurve.push(parseFloat((pnlCurve[pnlCurve.length-1]+pnlSOL).toFixed(4)));
+  if(pnlCurve.length>60) pnlCurve.shift();
+  history.unshift({...pos, exitPrice:pos.currentPrice, pnlSOL, pnlPct, reason, durS});
+  if(history.length>50) history.pop();
+  const icons={TP:'✅',SL:'🔴',TRAIL:'🟡',MANUAL:'⬛'};
+  addLog(pnlSOL>0?'tp':'sl', icons[reason]||'⬛',
+    `<strong>${pos.name}</strong> [${reason}] ${pnlSOL>=0?'+':''}${pnlSOL} SOL (${fmtPct(pnlPct)})`);
+  renderPositions();
+  renderHistory();
+  updateStats();
+  updateSimStats();
+  updateChart();
+}
+
+// ══════════════════════════════════════════════════════
+//  RENDER
+// ══════════════════════════════════════════════════════
+function renderFeed() {
+  const list = document.getElementById('feedList');
+  if(!feedItems.length){
+    list.innerHTML='<div style="text-align:center;padding:28px;color:var(--tm);font-family:Space Mono,monospace;font-size:11px">Menunggu pair baru... poll tiap 45s</div>';
+    return;
+  }
+  list.innerHTML = feedItems.map((t,i)=>{
+    const ageSec  = Math.floor((Date.now()-t.passedAt)/1000)+t.ageSec;
+    const within  = ageSec <= cfg.maxAgeSec;
+    const pct     = Math.min(100,(ageSec/cfg.maxAgeSec)*100);
+    const cls     = pct<50?'safe':pct<85?'warn':'late';
+    const auto    = within && cfg.autoBuy;
+    const alreadyIn = positions.find(p=>p.pairAddress===t.pairAddress);
+    const liqStr  = t.liqK>=1000?`$${(t.liqK/1000).toFixed(1)}M`:`$${t.liqK}K`;
+    const ageStr  = ageSec<60?ageSec+'s ago':Math.floor(ageSec/60)+'m ago';
+    const ageColor= cls==='safe'?'var(--g)':cls==='warn'?'var(--y)':'var(--r)';
+    return `<div class="fi ${i===0?'new':''}" style="${auto&&!alreadyIn?'border-left:2px solid var(--i5);':''}">
+      <div class="fav" style="background:linear-gradient(135deg,${t.color}44,${t.color}22)"><span style="color:${t.color}">${t.name.slice(0,3)}</span></div>
+      <div class="fi-info">
+        <div class="fi-name">${t.name}
+          ${auto&&!alreadyIn?'<span style="font-family:Space Mono,monospace;font-size:8px;padding:1px 5px;border-radius:99px;background:rgba(99,102,241,0.15);border:1px solid var(--bb);color:var(--i4)">AUTO</span>':''}
+          ${alreadyIn?'<span style="font-family:Space Mono,monospace;font-size:8px;padding:1px 5px;border-radius:99px;background:var(--gd);color:var(--g)">IN POS</span>':''}
+        </div>
+        <div class="fi-meta">$${t.priceUsd.toFixed(8)} · Liq ${liqStr}</div>
+        <div class="age-bar"><div class="ab-fill ${cls}" style="width:${pct}%"></div></div>
+      </div>
+      <div class="dex-tag">${t.dexLabel}</div>
+      <div class="fr">
+        <div class="fr-liq">${liqStr}</div>
+        <div class="fr-age" style="color:${ageColor}">${ageStr}</div>
+      </div>
+      <button class="snipe-btn ${auto&&!alreadyIn?'auto':''} ${alreadyIn?'disabled':''}"
+        onclick="manualSnipe('${t.pairAddress}')">
+        ${alreadyIn?'OPEN':auto?'⚡ AUTO':'SNIPE'}
+      </button>
+    </div>`;
+  }).join('');
+}
+
+function manualSnipe(pairAddress) {
+  const item = feedItems.find(t=>t.pairAddress===pairAddress);
+  if(!item||positions.find(p=>p.pairAddress===pairAddress)) return;
+  executeBuy(item, false);
+}
+
+function renderPositions() {
+  const tbody = document.getElementById('posTBody');
+  document.getElementById('posBadge').textContent = positions.length+' OPEN';
+  if(!positions.length){
+    tbody.innerHTML='<tr><td colspan="8" style="text-align:center;padding:20px;color:var(--tm);font-size:11px">Tidak ada posisi terbuka.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = positions.map(pos=>{
+    const p = pos.pnlPct, pCls=p>=0?'p':'n';
+    const trailDrop = cfg.trailOn && pos.trailHigh > pos.entryPrice ? ((pos.currentPrice/pos.trailHigh)-1)*100 : null;
+    let st = `<span class="sb hold"><span class="blink">●</span> HOLD</span>`;
+    if(trailDrop !== null && trailDrop < -10 && p > 20) st=`<span class="sb trail">TRAIL</span>`;
+    else if(p >= (cfg.tpMult-1)*100*0.75) st=`<span class="sb tp">NEAR TP</span>`;
+    return `<tr id="pr-${pos.id}">
+      <td><div class="tc">
+        <div class="tav" style="background:linear-gradient(135deg,${pos.color}44,${pos.color}22)"><span style="color:${pos.color}">${pos.name.slice(0,2)}</span></div>
+        <div><div class="tn">${pos.name}</div><div class="td">${pos.dexLabel}</div></div>
+      </div></td>
+      <td>$${pos.entryPrice.toFixed(8)}</td>
+      <td style="color:${p>=0?'var(--g)':'var(--r)'}">$${pos.currentPrice.toFixed(8)}</td>
+      <td>${pos.size} SOL</td>
+      <td><span class="pb ${pCls}">${fmtPct(p)}</span></td>
+      <td><span style="color:var(--g);font-size:9px">${cfg.tpMult}×</span>/<span style="color:var(--r);font-size:9px">-${cfg.slPct}%</span></td>
+      <td>${st}</td>
+      <td><button class="exit-btn" onclick="manualExit(${pos.id})">EXIT</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function renderHistory() {
+  const tbody = document.getElementById('histTBody');
+  if(!history.length){ tbody.innerHTML='<tr><td colspan="7" style="text-align:center;padding:20px;color:var(--tm);font-size:11px">Belum ada.</td></tr>'; return; }
+  tbody.innerHTML = history.slice(0,20).map(h=>{
+    const pCls=h.pnlSOL>=0?'p':'n';
+    const dur=h.durS<60?h.durS+'s':Math.floor(h.durS/60)+'m'+h.durS%60+'s';
+    const icons={TP:'✅',SL:'🔴',TRAIL:'🟡',MANUAL:'⬛'};
+    return `<tr>
+      <td><div class="tc"><div class="tav" style="background:linear-gradient(135deg,${h.color}44,${h.color}22)"><span style="color:${h.color}">${h.name.slice(0,2)}</span></div>
+      <div><div class="tn">${h.name}</div><div class="td">${h.dexLabel}</div></div></div></td>
+      <td>$${h.entryPrice.toFixed(8)}</td>
+      <td>$${h.exitPrice.toFixed(8)}</td>
+      <td>${h.size} SOL</td>
+      <td><span class="pb ${pCls}">${fmtSOL(h.pnlSOL)}</span></td>
+      <td>${icons[h.reason]||''} ${h.reason}</td>
+      <td style="color:var(--tm)">${dur}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderDexList() {
+  const known = ['raydium','meteora','orca','pumpswap','meteora-dbc','pump-fun'];
+  const shown = {};
+  document.getElementById('dexList').innerHTML = known.map(id=>{
+    const info = DEX_MAP[id];
+    if(!info) return '';
+    if(shown[info.label]) return ''; shown[info.label]=true;
+    const isExcl = id.includes('pump') && id.includes('fun');
+    const isOn   = isExcl ? false : info.on;
+    return `<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--b)">
+      <div style="display:flex;align-items:center;gap:8px">
+        <div style="width:8px;height:8px;border-radius:50%;background:${info.color};box-shadow:0 0 5px ${info.color}44"></div>
+        <span style="font-size:11px;color:${isExcl?'var(--tm)':'var(--t2)'}">${info.label}</span>
+        ${isExcl?'<span style="font-family:Space Mono,monospace;font-size:8px;color:var(--r)">(excluded)</span>':''}
+      </div>
+      <div class="tgl ${isOn?'on':'off'}" style="${isExcl?'opacity:0.3;cursor:not-allowed':''}" ${!isExcl?`onclick="toggleDex('${id}',this)"`:''}><div class="tgl-t"></div></div>
+    </div>`;
+  }).join('');
+}
+
+// ══════════════════════════════════════════════════════
+//  STATS & CHART
+// ══════════════════════════════════════════════════════
+function updateStats() {
+  const pnl = pnlCurve[pnlCurve.length-1];
+  const el  = document.getElementById('sPnl');
+  el.textContent = fmtSOL(pnl);
+  el.className   = 'stat-val '+(pnl>=0?'g':'r');
+  document.getElementById('sPnlUsd').textContent='≈ $'+(Math.abs(pnl)*SOL_PRICE).toFixed(2);
+  const wr = totalTrades>0?((wins/totalTrades)*100).toFixed(1)+'%':'—';
+  document.getElementById('sWr').textContent=wr;
+  document.getElementById('sWrSub').textContent=`${wins}W / ${losses}L`;
+  document.getElementById('sPos').textContent=positions.length;
+  document.getElementById('sTrades').textContent=totalTrades;
+  document.getElementById('sTradesSub').textContent=`${autoTrades} auto / ${manualTrades} manual`;
+  document.getElementById('sScanned').textContent=scannedCount.toLocaleString();
+  document.getElementById('sFilterSub').textContent=filteredCount+' passed filter';
+  document.getElementById('sWallet').textContent=wallet.toFixed(3);
+  document.getElementById('topWallet').textContent=wallet.toFixed(3);
+  document.getElementById('topScanned').textContent=scannedCount;
+  document.getElementById('topPassed').textContent=filteredCount;
+  document.getElementById('topTrades').textContent=totalTrades;
+  document.getElementById('walletBar').textContent=wallet.toFixed(3)+' SOL (paper)';
+}
+
+function updateSimStats() {
+  if(!history.length) return;
+  const ws=history.filter(h=>h.pnlSOL>0), ls=history.filter(h=>h.pnlSOL<=0);
+  const best=ws.length?Math.max(...ws.map(h=>h.pnlPct)):null;
+  const worst=ls.length?Math.min(...ls.map(h=>h.pnlPct)):null;
+  const avgW=ws.length?ws.reduce((a,b)=>a+b.pnlPct,0)/ws.length:null;
+  const avgL=ls.length?ls.reduce((a,b)=>a+b.pnlPct,0)/ls.length:null;
+  document.getElementById('stBest').textContent=best!==null?fmtPct(best):'—';
+  document.getElementById('stWorst').textContent=worst!==null?fmtPct(worst):'—';
+  document.getElementById('stAvgW').textContent=avgW!==null?fmtPct(avgW):'—';
+  document.getElementById('stAvgL').textContent=avgL!==null?fmtPct(avgL):'—';
+  document.getElementById('stSkip').textContent=skipCount;
+  document.getElementById('stExcl').textContent=exclCount;
+}
+
+function updateChart() {
+  const data=pnlCurve;
+  if(data.length<2) return;
+  document.getElementById('chartInfo').textContent=history.length+' closed trades';
+  const W=580,H=100,pd=8;
+  const mn=Math.min(...data),mx=Math.max(...data),range=mx-mn||0.001;
+  const pts=data.map((v,i)=>[pd+(i/(data.length-1))*(W-pd*2),H-pd-((v-mn)/range)*(H-pd*2)]);
+  const d=pts.map((p,i)=>(i===0?'M':'L')+p[0].toFixed(1)+','+p[1].toFixed(1)).join(' ');
+  document.getElementById('cFill').setAttribute('d',d+` L${pts[pts.length-1][0]},${H} L${pts[0][0]},${H} Z`);
+  document.getElementById('cLine').setAttribute('d',d);
+  const last=pts[pts.length-1];
+  const dot=document.getElementById('cDot');
+  dot.setAttribute('cx',last[0]);dot.setAttribute('cy',last[1]);dot.setAttribute('opacity','1');
+  const pos=data[data.length-1]>=0;
+  dot.setAttribute('fill',pos?'#10b981':'#ef4444');
+  document.getElementById('cLine').setAttribute('stroke',pos?'#6366f1':'#ef4444');
+}
+
+// ══════════════════════════════════════════════════════
+//  LOG
+// ══════════════════════════════════════════════════════
+function addLog(type,icon,text) {
+  logs.unshift({type,icon,text,time:new Date().toLocaleTimeString('id-ID')});
+  if(logs.length>40) logs.pop();
+  const body=document.getElementById('logBody');
+  body.innerHTML=logs.slice(0,20).map(l=>`
+    <div class="li"><div class="li-icon ${l.type}">${l.icon}</div>
+    <div><div class="li-text">${l.text}</div><div class="li-time">${l.time}</div></div></div>`).join('');
+}
+function clearLog(){ logs=[]; document.getElementById('logBody').innerHTML=''; }
+
+// ══════════════════════════════════════════════════════
+//  POLLING COUNTDOWN BAR
+// ══════════════════════════════════════════════════════
+function startCountdown() {
+  pollCountdown = POLL_PAIRS_MS/1000;
+  const update = setInterval(()=>{
+    if(paused){ return; }
+    pollCountdown--;
+    const pct = (pollCountdown/(POLL_PAIRS_MS/1000))*100;
+    document.getElementById('pollFill').style.width = pct+'%';
+    document.getElementById('pollNext').textContent = pollCountdown+'s';
+    if(pollCountdown<=0){
+      clearInterval(update);
+      runFetchCycle().then(startCountdown);
+    }
+  },1000);
+}
+
+// ══════════════════════════════════════════════════════
+//  SETTINGS HANDLERS
+// ══════════════════════════════════════════════════════
+function updateTPSL(){
+  cfg.tpMult=parseFloat(document.getElementById('tpInput').value)||3;
+  cfg.slPct=parseFloat(document.getElementById('slInput').value)||30;
+  document.getElementById('tpLabel').textContent=cfg.tpMult+'×';
+  document.getElementById('slLabel').textContent='-'+cfg.slPct+'%';
+}
+function updateFilter(){
+  cfg.minLiqK=parseInt(document.getElementById('minLiqInput').value)||30;
+  document.getElementById('minLiqLabel').textContent='$'+cfg.minLiqK+'K';
+  document.getElementById('condLiq').textContent='$'+cfg.minLiqK+'K';
+}
+function updateAge(el){
+  cfg.maxAgeSec=parseInt(el.value);
+  const p=((el.value-el.min)/(el.max-el.min))*100;
+  el.style.setProperty('--pct',p+'%');
+  let label,urg,uc,ub;
+  if(cfg.maxAgeSec<=60){label=cfg.maxAgeSec+'s';urg='ULTRA EARLY';uc='#10b981';ub='rgba(16,185,129,0.1)'}
+  else if(cfg.maxAgeSec<=180){label=Math.round(cfg.maxAgeSec/60)+'min';urg='EARLY';uc='#10b981';ub='rgba(16,185,129,0.1)'}
+  else if(cfg.maxAgeSec<=360){label=(cfg.maxAgeSec/60).toFixed(1)+'min';urg='MID';uc='#f59e0b';ub='rgba(245,158,11,0.1)'}
+  else{label=(cfg.maxAgeSec/60).toFixed(1)+'min';urg='LATE';uc='#ef4444';ub='rgba(239,68,68,0.1)'}
+  document.getElementById('ageVal').textContent=label;
+  document.getElementById('condAge').textContent=label;
+  document.getElementById('maxAgeLabel').textContent=label;
+  const t=document.getElementById('ageTag');
+  t.textContent=urg;t.style.color=uc;t.style.background=ub;
+  renderFeed();
+}
+function toggl(el){
+  el.classList.toggle('on');el.classList.toggle('off');
+  if(el.id==='trailTgl') cfg.trailOn=el.classList.contains('on');
+  if(el.id==='exclPumpTgl') cfg.excludePump=el.classList.contains('on');
+}
+function toggleAB(el){
+  cfg.autoBuy=!cfg.autoBuy;
+  el.classList.toggle('on');el.classList.toggle('off');
+  document.getElementById('abPanel').classList.toggle('off',!cfg.autoBuy);
+  renderFeed();
+}
+function toggleDex(id,el){
+  if(DEX_MAP[id]) DEX_MAP[id].on=!DEX_MAP[id].on;
+  el.classList.toggle('on');el.classList.toggle('off');
+}
+function togglePause(){
+  paused=!paused;
+  const btn=document.getElementById('pauseBtn');
+  btn.textContent=paused?'▶ RESUME':'⏸ PAUSE';
+  btn.style.background=paused?'linear-gradient(135deg,#065f46,#047857)':'';
+}
+function forceFetch(){
+  pollCountdown=0;
+}
+function switchTab(name,el){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.tab-c').forEach(t=>t.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('tab-'+name).classList.add('active');
+}
+function manualExit(id){
+  const pos=positions.find(p=>p.id===id);
+  if(pos) closePosition(pos,'MANUAL');
+}
+function resetPaper(){
+  if(!confirm('Reset semua paper trading data?')) return;
+  positions=[];history=[];pnlCurve=[0];feedItems=[];logs=[];
+  wallet=10;wins=0;losses=0;totalTrades=0;autoTrades=0;manualTrades=0;
+  scannedCount=0;filteredCount=0;skipCount=0;exclCount=0;abCount=0;
+  seenPairs=new Set();
+  document.getElementById('abCount').textContent='0 trades';
+  renderPositions();renderHistory();renderFeed();updateStats();updateChart();
+  addLog('info','🔄','Paper trading direset. Virtual wallet: 10 SOL');
+}
+function setApiStatus(type,text){
+  const el=document.getElementById('apiStatusText');
+  el.textContent=text;
+  el.className={ok:'api-ok',err:'api-err',wait:'api-wait'}[type]||'api-wait';
+}
+
+// ══════════════════════════════════════════════════════
+//  HELPERS
+// ══════════════════════════════════════════════════════
+function fmtSOL(v){ return (v>=0?'+':'')+v.toFixed(3) }
+function fmtPct(v){ return (v>=0?'+':'')+v.toFixed(1)+'%' }
+function sleep(ms){ return new Promise(r=>setTimeout(r,ms)) }
+
+// Init sliders
+document.querySelectorAll('input[type=range]').forEach(s=>{
+  const p=((s.value-s.min)/(s.max-s.min))*100;
+  s.style.setProperty('--pct',p+'%');
+});
+
+// ══════════════════════════════════════════════════════
+//  INIT
+// ══════════════════════════════════════════════════════
+renderDexList();
+renderFeed();
+updateStats();
+addLog('info','🚀','Paper trading started — virtual wallet: 10 SOL');
+addLog('info','📡','Connecting to DEXScreener API...');
+
+// Start price update loop
+setInterval(()=>{ if(!paused) runPriceUpdate(); }, POLL_PRICE_MS);
+
+// Initial fetch then start countdown
+runFetchCycle().then(startCountdown);
+
+// Re-render feed tiap 10 detik untuk update age bar
+setInterval(()=>renderFeed(), 10000);
+</script>
+</body>
+</html>
