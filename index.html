@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' https://api.dexscreener.com https://mainnet.helius-rpc.com wss://mainnet.helius-rpc.com https://fonts.googleapis.com https://fonts.gstatic.com; connect-src *;">
 <title>APEX SNIPER — Helius Live</title>
 <link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>
@@ -503,7 +504,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
 <!-- FOOTER -->
 <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 24px;background:rgba(99,102,241,0.04);border-top:1px solid var(--b)">
   <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--tm)">
-    ⚡ Helius WSS · DEXScreener price feed · Paper wallet
+    ⚡ Helius WSS · DEXScreener bulk price (3s) · Pending mint retry · Paper wallet
   </div>
   <div style="font-family:'Space Mono',monospace;font-size:12px;color:var(--y);font-weight:700" id="walletBar">10.000 SOL (paper)</div>
 </div>
@@ -529,13 +530,19 @@ const DEX_PROGRAMS = {
   'dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN':   { name:'Meteora DBC',   color:'#06b6d4', short:'DBC'  },
 };
 
-// Pool init keywords per program
+// Pool init keywords — STRICT (cuma yg bener-bener nge-create pool baru)
+// Dropped: InitializeMint (token creation, bukan pool), CreateMarket (Serum/OpenBook market)
 const INIT_KEYWORDS = [
-  'initializeInstruction','initialize2','InitializePool',
+  'initialize2','InitializePool','initializePool',
   'initializeLbPair','initializePermissionlessLbPair',
   'initializeVirtualPool','CreatePool','create_pool',
-  'InitializeMint','initializePool','CreateMarket'
+  'initializeInstruction'
 ];
+// Regex match instruction log line (bukan random substring di log apapun)
+const INIT_RE = new RegExp(
+  'program log:\\s*(?:instruction:\\s*)?(' + INIT_KEYWORDS.join('|') + ')\\b',
+  'i'
+);
 
 // ══════════════════════════════════════════════════════
 //  STATE
@@ -635,8 +642,8 @@ function handleWSSMessage(msg){
     dexActivity[matchedProgramId].events++;
     dexActivity[matchedProgramId].lastEvent = Date.now();
 
-    // Check if this is a pool init
-    const isInit = !err && INIT_KEYWORDS.some(kw => logs.some(l=>l.toLowerCase().includes(kw.toLowerCase())));
+    // Check if this is a pool init — STRICT regex (instruction log only)
+    const isInit = !err && logs.some(l => INIT_RE.test(l));
     if(isInit){ dexActivity[matchedProgramId].inits++; poolInits++; }
 
     // Update WSS log
@@ -648,117 +655,181 @@ function handleWSSMessage(msg){
     document.getElementById('stInits').textContent = poolInits;
     renderDexGrid();
 
-    // If pool init → try fetch DEXScreener for this program
+    // If pool init → trigger Helius parsed tx fetch
     if(isInit && !paused){
       wssTriggers++;
       document.getElementById('topTriggers').textContent = wssTriggers;
       document.getElementById('wssTime').textContent = new Date().toLocaleTimeString('id-ID');
-      // Pass account keys if available
-      const accounts = val.accountKeys || [];
-      triggerDEXFetch(matchedProgram, matchedProgramId, sig, accounts);
+      triggerDEXFetch(matchedProgram, matchedProgramId, sig);
     }
   }
 }
 
 // ══════════════════════════════════════════════════════
-//  DEX FETCH TRIGGER
+//  DEX FETCH TRIGGER — Helius Parsed TX → DEXScreener
 // ══════════════════════════════════════════════════════
-async function triggerDEXFetch(dexInfo, programId, sig, accounts){
-  addLog('wss','🔍',`Pool init on <strong>${dexInfo.name}</strong> — fetching pair data...`);
-  
+
+// Queue to avoid hammering APIs
+const sigQueue = [];
+let queueRunning = false;
+
+async function triggerDEXFetch(dexInfo, programId, sig){
+  sigQueue.push({ dexInfo, programId, sig });
+  if(!queueRunning) processQueue();
+}
+
+async function processQueue(){
+  if(queueRunning) return;
+  queueRunning = true;
+  while(sigQueue.length > 0){
+    const job = sigQueue.shift();
+    await processOneSig(job.dexInfo, job.programId, job.sig);
+    await sleep(150); // throttle (was 500ms — terlalu lama untuk burst pool init)
+  }
+  queueRunning = false;
+}
+
+async function processOneSig(dexInfo, programId, sig){
   try {
-    // Try to get transaction to extract token address
-    const tokenAddresses = await extractTokensFromTx(sig);
-    
-    if(tokenAddresses.length > 0){
-      // Fetch pair data for each token
-      for(const addr of tokenAddresses.slice(0,3)){
-        await fetchAndProcessPair(addr, dexInfo);
-        await sleep(300);
+    // Step 1: Get parsed transaction from Helius REST API
+    // This is different from RPC — no CSP issues
+    const mints = await getMintFromHelixParsed(sig);
+
+    if(mints.length > 0){
+      addLog('wss','🔍',`<strong>${dexInfo.name}</strong> pool init — ${mints.length} token(s) found`);
+      for(const mint of mints){
+        await fetchPairByMint(mint, dexInfo);
+        await sleep(120); // was 300ms
       }
     } else {
-      // Fallback: search DEXScreener for very recent pairs
-      await searchRecentPairs(dexInfo);
+      addLog('wss','🔍',`<strong>${dexInfo.name}</strong> pool init — no mint extracted, skipping`);
     }
   } catch(e){
-    addLog('warn','⚠️',`Fetch error: ${e.message}`);
-    // Fallback to search
-    await searchRecentPairs(dexInfo);
+    addLog('warn','⚠️',`processOneSig error: ${e.message}`);
   }
 }
 
-async function extractTokensFromTx(sig){
+// Helius Enhanced Transaction API — parsed, no eval, no CSP issue
+async function getMintFromHelixParsed(sig){
   try {
-    const res = await fetch(HELIUS_RPC, {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({
-        jsonrpc:'2.0', id:1,
-        method:'getTransaction',
-        params:[sig, {encoding:'jsonParsed', maxSupportedTransactionVersion:0}]
-      })
+    const url = `https://api.helius.xyz/v0/transactions/?api-key=${HELIUS_API_KEY}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ transactions: [sig] })
     });
+    if(!res.ok) return [];
     const data = await res.json();
-    const tx   = data.result;
+    const tx = data?.[0];
     if(!tx) return [];
-    
-    // Extract token mint addresses from post token balances
+
     const mints = new Set();
-    const postBal = tx.meta?.postTokenBalances || [];
-    postBal.forEach(b=>{
-      if(b.mint && b.mint !== 'So11111111111111111111111111111111111111112'){
-        mints.add(b.mint);
+    const SOL_MINT = 'So11111111111111111111111111111111111111112';
+    const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+    const USDT_MINT = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB';
+    const SKIP = new Set([SOL_MINT, USDC_MINT, USDT_MINT]);
+
+    // From tokenTransfers
+    (tx.tokenTransfers || []).forEach(t => {
+      if(t.mint && !SKIP.has(t.mint)) mints.add(t.mint);
+    });
+
+    // From accountData
+    (tx.accountData || []).forEach(a => {
+      if(a.tokenBalanceChanges){
+        a.tokenBalanceChanges.forEach(b => {
+          if(b.mint && !SKIP.has(b.mint)) mints.add(b.mint);
+        });
       }
     });
-    // Also check account keys for token program accounts
-    const accounts = tx.transaction?.message?.accountKeys || [];
-    accounts.forEach(a=>{
-      const pk = a.pubkey || a;
-      if(pk && pk.length === 44 && !pk.startsWith('111') && mints.size < 5){
-        // Heuristic: token mints are usually 44 chars base58
-      }
-    });
-    return [...mints].slice(0,3);
+
+    return [...mints].slice(0, 3);
   } catch(e){
     return [];
   }
 }
 
-async function fetchAndProcessPair(tokenAddress, dexInfo){
-  scannedCount++;
+// Fetch DEXScreener by token mint — guaranteed fresh pair
+async function fetchPairByMint(mint, dexInfo){
   try {
-    const res  = await fetch(`${DEXSCREENER}/latest/dex/tokens/${tokenAddress}`);
+    scannedCount++;
+    const res = await fetch(`${DEXSCREENER}/latest/dex/tokens/${mint}`);
+    if(!res.ok) return;
     const data = await res.json();
-    const pairs = data.pairs?.filter(p=>p.chainId==='solana') || [];
-    
-    for(const pair of pairs){
-      await processPair(pair, dexInfo);
+    const pairs = (data.pairs || [])
+      .filter(p => p.chainId === 'solana')
+      .sort((a,b) => (b.pairCreatedAt||0) - (a.pairCreatedAt||0)); // newest first
+
+    if(!pairs.length){
+      // DEXScreener belum index — masuk pending queue, retry di background
+      addLog('info','⏳',`<strong>${dexInfo.name}</strong> mint <code>${mint.slice(0,4)}...${mint.slice(-4)}</code> belum di-index, retry background`);
+      enqueuePending(mint, dexInfo);
+      return;
     }
+
+    let passed = 0;
+    for(const pair of pairs){
+      const ok = await processPair(pair, dexInfo);
+      if(ok) passed++;
+    }
+
+    // Debug log kalau semua gagal filter
+    if(passed === 0 && pairs[0]){
+      const p = pairs[0];
+      const liq = p.liquidity?.usd || 0;
+      const ageSec = Math.floor((Date.now() - (p.pairCreatedAt||Date.now()))/1000);
+      addLog('info','⚙️',`${p.baseToken?.symbol||'?'} skip: age ${ageSec<60?ageSec+'s':Math.floor(ageSec/60)+'m'}, liq $${Math.round(liq/1000)}K`);
+    }
+    updateStats();
   } catch(e){ /* silent */ }
 }
 
-async function searchRecentPairs(dexInfo){
-  // Search DEXScreener for the DEX name — get recent pairs
-  try {
-    const res  = await fetch(`${DEXSCREENER}/latest/dex/search?q=${encodeURIComponent(dexInfo.name)}`);
-    const data = await res.json();
-    const pairs = data.pairs?.filter(p=>p.chainId==='solana') || [];
-    
-    // Sort by age (newest first)
-    pairs.sort((a,b)=>(b.pairCreatedAt||0)-(a.pairCreatedAt||0));
-    
-    // Process top 5 newest
-    for(const pair of pairs.slice(0,5)){
-      scannedCount++;
-      await processPair(pair, dexInfo);
-      await sleep(100);
-    }
-  } catch(e){ /* silent */ }
+// ══════════════════════════════════════════════════════
+//  PENDING MINT QUEUE — retry kalau DEXScreener belum index
+// ══════════════════════════════════════════════════════
+// DEXScreener biasanya butuh 30-60s untuk index pool baru.
+// Mint yang return empty masuk sini, di-retry tiap 5s sampai 60s.
+const pendingMints = new Map(); // mint -> { dexInfo, attempts, firstSeen }
+const PENDING_MAX_AGE = 60000;  // total 60s
+const PENDING_INTERVAL = 5000;  // retry tiap 5s
+
+function enqueuePending(mint, dexInfo){
+  if(pendingMints.has(mint)) return;
+  pendingMints.set(mint, { dexInfo, attempts: 0, firstSeen: Date.now() });
 }
+
+async function processPendingMints(){
+  if(!pendingMints.size) return;
+  for(const [mint, entry] of [...pendingMints.entries()]){
+    const age = Date.now() - entry.firstSeen;
+    if(age > PENDING_MAX_AGE){
+      addLog('info','⌛',`Mint <code>${mint.slice(0,4)}...${mint.slice(-4)}</code> [${entry.dexInfo.name}] gave up after ${Math.floor(age/1000)}s`);
+      pendingMints.delete(mint);
+      continue;
+    }
+    entry.attempts++;
+    try {
+      const res = await fetch(`${DEXSCREENER}/latest/dex/tokens/${mint}`);
+      if(!res.ok) continue;
+      const data = await res.json();
+      const pairs = (data.pairs||[])
+        .filter(p => p.chainId === 'solana')
+        .sort((a,b) => (b.pairCreatedAt||0) - (a.pairCreatedAt||0));
+      if(pairs.length){
+        addLog('wss','✅',`<strong>${entry.dexInfo.name}</strong> mint indexed after ${Math.floor(age/1000)}s (try ${entry.attempts})`);
+        pendingMints.delete(mint);
+        for(const p of pairs) await processPair(p, entry.dexInfo);
+      }
+    } catch(e){ /* silent retry */ }
+    await sleep(80); // small gap antar mint biar nggak hammer
+  }
+}
+
+setInterval(processPendingMints, PENDING_INTERVAL);
 
 async function processPair(pair, dexInfo){
-  if(!pair.pairAddress) return;
-  if(seenPairs.has(pair.pairAddress)) return;
+  if(!pair.pairAddress) return false;
+  if(seenPairs.has(pair.pairAddress)) return false;
 
   const liqUsd  = pair.liquidity?.usd || 0;
   const ageSec  = Math.floor((Date.now()-(pair.pairCreatedAt||Date.now()))/1000);
@@ -766,15 +837,17 @@ async function processPair(pair, dexInfo){
   const price   = parseFloat(pair.priceUsd)||0;
   const name    = pair.baseToken?.symbol||'UNKNOWN';
 
-  // Exclude pump.fun
-  if(cfg.excludePump && dexId.includes('pump') && dexId.includes('fun')){ skipCount++; return; }
-  // Liq filter
-  if(liqUsd < cfg.minLiqK*1000){ skipCount++; return; }
-  // Age filter
-  if(ageSec > cfg.maxAgeSec){ skipCount++; return; }
-  if(price <= 0) return;
-
+  // Always mark seen to avoid re-processing
   seenPairs.add(pair.pairAddress);
+
+  // Exclude pump.fun
+  if(cfg.excludePump && dexId.includes('pump') && dexId.includes('fun')){ skipCount++; return false; }
+  // Liq filter
+  if(liqUsd < cfg.minLiqK*1000){ skipCount++; return false; }
+  // Age filter
+  if(ageSec > cfg.maxAgeSec){ skipCount++; return false; }
+  if(price <= 0) return false;
+
   filteredCount++;
 
   const item = {
@@ -792,46 +865,113 @@ async function processPair(pair, dexInfo){
   if(feedItems.length>12) feedItems.pop();
   renderFeed();
 
-  addLog('entry','🎯',`Pair detected: <strong>${name}</strong> @ $${price.toFixed(8)} [${dexInfo.name}] Liq $${Math.round(liqUsd/1000)}K`);
+  addLog('entry','🎯',`<strong>${name}</strong> @ $${price.toFixed(8)} [${dexInfo.name}] Liq $${Math.round(liqUsd/1000)}K Age ${ageSec<60?ageSec+'s':Math.floor(ageSec/60)+'m'}`);
 
-  // AUTO BUY
+  // AUTO BUY — instant, no artificial delay
   if(cfg.autoBuy && positions.length < cfg.maxPos && wallet >= cfg.tradeSize){
-    setTimeout(()=>executeBuy(item, true), 400);
+    executeBuy(item, true);
   }
 
-  updateStats();
+  saveState();
+  return true;
+}
+
+// ══════════════════════════════════════════════════════
+//  LOCALSTORAGE PERSISTENCE
+// ══════════════════════════════════════════════════════
+const LS_KEY = 'apexSniper_v1';
+
+function saveState(){
+  try {
+    localStorage.setItem(LS_KEY, JSON.stringify({
+      wallet, wins, losses, totalTrades, autoTrades, manualTrades,
+      scannedCount, filteredCount, skipCount, poolInits, abCount,
+      wssEventCount, wssTriggers,
+      history: history.slice(0,50),
+      pnlCurve: pnlCurve.slice(-60),
+      seenPairs: [...seenPairs].slice(-500), // keep last 500
+      savedAt: Date.now(),
+    }));
+  } catch(e){ /* storage full or private mode */ }
+}
+
+function loadState(){
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    if(!raw) return false;
+    const d = JSON.parse(raw);
+    // Only restore if saved within last 24 hours
+    if(Date.now() - d.savedAt > 86400000) return false;
+    wallet        = d.wallet        ?? 10;
+    wins          = d.wins          ?? 0;
+    losses        = d.losses        ?? 0;
+    totalTrades   = d.totalTrades   ?? 0;
+    autoTrades    = d.autoTrades    ?? 0;
+    manualTrades  = d.manualTrades  ?? 0;
+    scannedCount  = d.scannedCount  ?? 0;
+    filteredCount = d.filteredCount ?? 0;
+    skipCount     = d.skipCount     ?? 0;
+    poolInits     = d.poolInits     ?? 0;
+    abCount       = d.abCount       ?? 0;
+    wssEventCount = d.wssEventCount ?? 0;
+    wssTriggers   = d.wssTriggers   ?? 0;
+    history       = d.history       ?? [];
+    pnlCurve      = d.pnlCurve      ?? [0];
+    seenPairs     = new Set(d.seenPairs ?? []);
+    document.getElementById('abCount').textContent = abCount+' trades';
+    const ago = Math.round((Date.now()-d.savedAt)/60000);
+    addLog('info','💾',`State restored — ${ago}m ago | ${totalTrades} trades | wallet ${wallet.toFixed(3)} SOL`);
+    return true;
+  } catch(e){ return false; }
 }
 
 // ══════════════════════════════════════════════════════
 //  PRICE UPDATE
 // ══════════════════════════════════════════════════════
+// BULK fetch: 1 request untuk semua posisi sekaligus (DEXScreener support up to 30 pairs/req)
+// Dipanggil tiap 3 detik — TP/SL fire near-real-time
+let _updateInflight = false;
 async function updatePrices(){
-  if(paused || !positions.length) return;
-  for(const pos of [...positions]){
-    try {
-      const res  = await fetch(`${DEXSCREENER}/latest/dex/pairs/solana/${pos.pairAddress}`);
-      const data = await res.json();
-      const pair = data.pairs?.[0];
+  if(paused || !positions.length || _updateInflight) return;
+  _updateInflight = true;
+  try {
+    const addrs = positions.map(p=>p.pairAddress);
+    const chunks = [];
+    for(let i=0;i<addrs.length;i+=30) chunks.push(addrs.slice(i,i+30));
+
+    const pairsMap = new Map();
+    await Promise.all(chunks.map(async chunk => {
+      try {
+        const res = await fetch(`${DEXSCREENER}/latest/dex/pairs/solana/${chunk.join(',')}`);
+        if(!res.ok) return;
+        const data = await res.json();
+        (data.pairs || []).forEach(p => { if(p.pairAddress) pairsMap.set(p.pairAddress, p); });
+      } catch(e){}
+    }));
+
+    for(const pos of [...positions]){
+      const pair = pairsMap.get(pos.pairAddress);
       if(!pair) continue;
-      
       const newPrice = parseFloat(pair.priceUsd)||pos.currentPrice;
       pos.currentPrice = newPrice;
       pos.liqUsd = pair.liquidity?.usd||pos.liqUsd;
       pos.pnlPct = ((pos.currentPrice-pos.entryPrice)/pos.entryPrice)*100;
       pos.pnlSOL = parseFloat(((pos.pnlPct/100)*pos.size).toFixed(4));
       if(pos.currentPrice>pos.trailHigh) pos.trailHigh=pos.currentPrice;
-      
+
       const trailDrop = cfg.trailOn&&pos.trailHigh>pos.entryPrice ? ((pos.currentPrice/pos.trailHigh)-1)*100 : null;
-      
+
       if(pos.pnlPct>=(cfg.tpMult-1)*100){ closePos(pos,'TP'); continue; }
       if(pos.pnlPct<=-cfg.slPct){ closePos(pos,'SL'); continue; }
       if(trailDrop!==null&&trailDrop<=-20&&pos.pnlPct>30){ closePos(pos,'TRAIL'); continue; }
-      
-      await sleep(300);
-    } catch(e){}
+    }
+    renderPositions();
+    updateStats();
+  } catch(e){
+    /* silent */
+  } finally {
+    _updateInflight = false;
   }
-  renderPositions();
-  updateStats();
 }
 
 // ══════════════════════════════════════════════════════
@@ -875,6 +1015,7 @@ function closePos(pos, reason){
   addLog(pnlSOL>0?'tp':'sl',icons[reason]||'⬛',
     `<strong>${pos.name}</strong> [${reason}] ${pnlSOL>=0?'+':''}${pnlSOL} SOL (${fmtPct(pnlPct)})`);
   renderPositions(); renderHistory(); updateStats(); updSimStats(); updChart();
+  saveState();
 }
 
 // ══════════════════════════════════════════════════════
@@ -1120,6 +1261,7 @@ function resetAll(){
   wssEventCount=0;wssTriggers=0;seenPairs=new Set();
   Object.keys(dexActivity).forEach(k=>{dexActivity[k]={events:0,inits:0,lastEvent:0};});
   document.getElementById('abCount').textContent='0 trades';
+  localStorage.removeItem(LS_KEY);
   renderPositions();renderHistory();renderFeed();renderDexGrid();updateStats();updChart();
   addLog('info','🔄','Reset. Virtual wallet: 10 SOL');
 }
@@ -1152,15 +1294,19 @@ document.querySelectorAll('input[type=range]').forEach(s=>{
 // ══════════════════════════════════════════════════════
 renderDexGrid();
 renderFeed();
+const restored = loadState();
 updateStats();
+if(restored){ renderHistory(); updChart(); }
 addLog('info','🚀','APEX Sniper started — connecting Helius WSS...');
 
-// Price update loop
-setInterval(()=>{ if(!paused) updatePrices(); }, 30000);
+// Price update loop — FAST (3s) untuk near-realtime TP/SL
+setInterval(()=>{ if(!paused) updatePrices(); }, 3000);
 // Feed age refresh
 setInterval(()=>renderFeed(), 10000);
 // DEX grid refresh
 setInterval(()=>renderDexGrid(), 2000);
+// Auto-save every 30s
+setInterval(()=>saveState(), 30000);
 
 // Connect WSS
 connectWSS();
