@@ -413,7 +413,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         <div class="sr">
           <div class="sl">Size per trade</div>
           <div style="display:flex;align-items:center;gap:4px">
-            <input class="si" id="sizeInput" value="0.3">
+            <input class="si" id="sizeInput" value="0.1">
             <span style="font-size:10px;color:var(--tm)">SOL</span>
           </div>
         </div>
@@ -548,14 +548,21 @@ const INIT_RE = new RegExp(
 //  STATE
 // ══════════════════════════════════════════════════════
 const cfg = {
-  tpMult:3, slPct:30, trailOn:true, tradeSize:0.3,
+  tpMult:3, slPct:30, trailOn:true, tradeSize:0.1,
   maxPos:5, minLiqK:30, maxAgeSec:120, autoBuy:true, excludePump:true
 };
-let wallet=10.0, paused=false;
+let wallet=1.0, paused=false;
 let positions=[], history=[], pnlCurve=[0], feedItems=[], elogs=[], wssEvents=[];
 let wins=0, losses=0, totalTrades=0, autoTrades=0, manualTrades=0;
 let scannedCount=0, filteredCount=0, skipCount=0, poolInits=0, abCount=0;
 let wssEventCount=0, wssTriggers=0, seenPairs=new Set();
+// Dedup by mint (token address) — prevents re-buying same token via new pools
+// Map: mintAddress -> timestamp last seen
+let seenMints = new Map();
+const SEEN_MINT_TTL = 60 * 60 * 1000; // 1 hour
+// Mints yg pernah SL atau rug — banned, jangan dibeli ulang
+let bannedMints = new Map(); // mint -> { reason, until }
+const BAN_TTL = 2 * 60 * 60 * 1000; // 2 hours
 let ws=null, wssReconnectTimer=null;
 
 // DEX activity counters
@@ -836,9 +843,29 @@ async function processPair(pair, dexInfo){
   const dexId   = (pair.dexId||'').toLowerCase();
   const price   = parseFloat(pair.priceUsd)||0;
   const name    = pair.baseToken?.symbol||'UNKNOWN';
+  const mint    = pair.baseToken?.address||'';
 
-  // Always mark seen to avoid re-processing
   seenPairs.add(pair.pairAddress);
+
+  // ─── DEDUP BY MINT (token address) ─────────────────
+  // Beda pair tapi token sama? Skip — bisa jadi re-launch / migration
+  if(mint){
+    const lastSeen = seenMints.get(mint);
+    if(lastSeen && (Date.now() - lastSeen) < SEEN_MINT_TTL){
+      addLog('info','♻️',`<strong>${name}</strong> skipped — same mint already seen ${Math.floor((Date.now()-lastSeen)/60000)}m ago`);
+      skipCount++; return false;
+    }
+    // Sudah ada di posisi aktif?
+    if(positions.find(p => p.tokenAddress === mint)){
+      skipCount++; return false;
+    }
+    // Banned (pernah SL/rug)?
+    const ban = bannedMints.get(mint);
+    if(ban && Date.now() < ban.until){
+      addLog('info','🚫',`<strong>${name}</strong> blocked — banlist (${ban.reason})`);
+      skipCount++; return false;
+    }
+  }
 
   // Exclude pump.fun
   if(cfg.excludePump && dexId.includes('pump') && dexId.includes('fun')){ skipCount++; return false; }
@@ -848,11 +875,62 @@ async function processPair(pair, dexInfo){
   if(ageSec > cfg.maxAgeSec){ skipCount++; return false; }
   if(price <= 0) return false;
 
+  // ─── HONEYPOT / RUG HEURISTICS ─────────────────────
+  const txns_h1 = pair.txns?.h1 || {};
+  const txns_m5 = pair.txns?.m5 || {};
+  const buys_h1  = txns_h1.buys  || 0;
+  const sells_h1 = txns_h1.sells || 0;
+  const buys_m5  = txns_m5.buys  || 0;
+  const sells_m5 = txns_m5.sells || 0;
+  const vol_h1   = pair.volume?.h1 || 0;
+  const chg_h1   = pair.priceChange?.h1 || 0;
+  const chg_m5   = pair.priceChange?.m5 || 0;
+
+  // [1] Sell pressure dominan = lagi di-dump / rug in progress
+  if(buys_h1 + sells_h1 >= 20 && sells_h1 > buys_h1 * 2.5){
+    addLog('info','🚨',`<strong>${name}</strong> blocked — sell pressure (${sells_h1}S / ${buys_h1}B in 1h)`);
+    bannedMints.set(mint, { reason:'sell-pressure', until: Date.now()+BAN_TTL });
+    skipCount++; return false;
+  }
+
+  // [2] Sangat sedikit buyer = pool sepi / dead = tidak ada exit liquidity
+  if(ageSec > 300 && buys_h1 < 3){
+    addLog('info','💀',`<strong>${name}</strong> blocked — dead pool (only ${buys_h1} buys in 1h, age ${Math.floor(ageSec/60)}m)`);
+    skipCount++; return false;
+  }
+
+  // [3] Wash trading — volume tidak masuk akal vs likuiditas
+  if(vol_h1 > liqUsd * 15){
+    addLog('info','🧼',`<strong>${name}</strong> blocked — wash trading suspect (vol $${Math.round(vol_h1/1000)}K / liq $${Math.round(liqUsd/1000)}K)`);
+    bannedMints.set(mint, { reason:'wash', until: Date.now()+BAN_TTL });
+    skipCount++; return false;
+  }
+
+  // [4] Sudah pump terlalu tinggi = lo udah ketinggalan, masuk = exit liquidity buat orang lain
+  if(chg_h1 > 1500){
+    addLog('info','📈',`<strong>${name}</strong> blocked — already pumped +${Math.round(chg_h1)}% in 1h, late entry`);
+    skipCount++; return false;
+  }
+
+  // [5] Recent dump (5m turun parah) = rug in progress
+  if(chg_m5 < -40 && (buys_m5 + sells_m5) > 5){
+    addLog('info','🩸',`<strong>${name}</strong> blocked — dumping ${Math.round(chg_m5)}% in 5m`);
+    bannedMints.set(mint, { reason:'dumping', until: Date.now()+BAN_TTL });
+    skipCount++; return false;
+  }
+
+  // [6] Liquidity terlalu rendah relatif harga = thin order book = slippage parah
+  if(liqUsd < 5000){
+    addLog('info','💧',`<strong>${name}</strong> blocked — liq too thin ($${Math.round(liqUsd)})`);
+    skipCount++; return false;
+  }
+
   filteredCount++;
+  seenMints.set(mint, Date.now());
 
   const item = {
     pairAddress: pair.pairAddress,
-    tokenAddress: pair.baseToken?.address||'',
+    tokenAddress: mint,
     name, dexId,
     dexLabel: dexInfo.name,
     color: dexInfo.color,
@@ -865,7 +943,7 @@ async function processPair(pair, dexInfo){
   if(feedItems.length>12) feedItems.pop();
   renderFeed();
 
-  addLog('entry','🎯',`<strong>${name}</strong> @ $${price.toFixed(8)} [${dexInfo.name}] Liq $${Math.round(liqUsd/1000)}K Age ${ageSec<60?ageSec+'s':Math.floor(ageSec/60)+'m'}`);
+  addLog('entry','🎯',`<strong>${name}</strong> @ $${price.toFixed(8)} [${dexInfo.name}] Liq $${Math.round(liqUsd/1000)}K Age ${ageSec<60?ageSec+'s':Math.floor(ageSec/60)+'m'} · ${buys_h1}B/${sells_h1}S`);
 
   // AUTO BUY — instant, no artificial delay
   if(cfg.autoBuy && positions.length < cfg.maxPos && wallet >= cfg.tradeSize){
@@ -889,7 +967,9 @@ function saveState(){
       wssEventCount, wssTriggers,
       history: history.slice(0,50),
       pnlCurve: pnlCurve.slice(-60),
-      seenPairs: [...seenPairs].slice(-500), // keep last 500
+      seenPairs: [...seenPairs].slice(-500),
+      seenMints: [...seenMints.entries()].slice(-300),
+      bannedMints: [...bannedMints.entries()].slice(-200),
       savedAt: Date.now(),
     }));
   } catch(e){ /* storage full or private mode */ }
@@ -900,9 +980,8 @@ function loadState(){
     const raw = localStorage.getItem(LS_KEY);
     if(!raw) return false;
     const d = JSON.parse(raw);
-    // Only restore if saved within last 24 hours
     if(Date.now() - d.savedAt > 86400000) return false;
-    wallet        = d.wallet        ?? 10;
+    wallet        = d.wallet        ?? 1;
     wins          = d.wins          ?? 0;
     losses        = d.losses        ?? 0;
     totalTrades   = d.totalTrades   ?? 0;
@@ -918,6 +997,8 @@ function loadState(){
     history       = d.history       ?? [];
     pnlCurve      = d.pnlCurve      ?? [0];
     seenPairs     = new Set(d.seenPairs ?? []);
+    seenMints     = new Map(d.seenMints ?? []);
+    bannedMints   = new Map(d.bannedMints ?? []);
     document.getElementById('abCount').textContent = abCount+' trades';
     const ago = Math.round((Date.now()-d.savedAt)/60000);
     addLog('info','💾',`State restored — ${ago}m ago | ${totalTrades} trades | wallet ${wallet.toFixed(3)} SOL`);
@@ -952,7 +1033,21 @@ async function updatePrices(){
     for(const pos of [...positions]){
       const pair = pairsMap.get(pos.pairAddress);
       if(!pair) continue;
-      const newPrice = parseFloat(pair.priceUsd)||pos.currentPrice;
+      const rawPrice = parseFloat(pair.priceUsd)||pos.currentPrice;
+
+      // SANITY FILTER: tolak harga absurd (DEXScreener kadang glitch untuk pool dangkal)
+      // Move >500% dalam 1 update = pasti glitch, abaikan
+      const moveRatio = rawPrice / pos.currentPrice;
+      if(moveRatio > 6 || moveRatio < 1/6){
+        // Glitch detected — skip update, jangan trigger TP/SL dari data sampah
+        continue;
+      }
+      // Cap absolut: harga > 10000× entry price = glitch (token meme nggak ke segitu)
+      if(rawPrice > pos.entryPrice * 10000){
+        continue;
+      }
+
+      const newPrice = rawPrice;
       pos.currentPrice = newPrice;
       pos.liqUsd = pair.liquidity?.usd||pos.liqUsd;
       pos.pnlPct = ((pos.currentPrice-pos.entryPrice)/pos.entryPrice)*100;
@@ -1002,14 +1097,33 @@ function executeBuy(item, isAuto){
 
 function closePos(pos, reason){
   positions=positions.filter(p=>p.id!==pos.id);
-  const pnlSOL=parseFloat(((pos.currentPrice-pos.entryPrice)/pos.entryPrice*pos.size).toFixed(4));
-  const pnlPct=((pos.currentPrice-pos.entryPrice)/pos.entryPrice)*100;
+
+  // REALISTIC EXIT PRICE — cap ke threshold yang dimaksud, bukan glitch price
+  let exitPrice = pos.currentPrice;
+  if(reason === 'TP'){
+    exitPrice = pos.entryPrice * cfg.tpMult;
+  } else if(reason === 'SL'){
+    exitPrice = pos.entryPrice * (1 - cfg.slPct/100);
+  } else if(reason === 'TRAIL'){
+    exitPrice = pos.trailHigh * 0.80;
+  }
+
+  // Auto-ban token yang rugi — jangan dibeli ulang via pool baru
+  if(pos.tokenAddress && (reason === 'SL' || reason === 'TRAIL')){
+    bannedMints.set(pos.tokenAddress, {
+      reason: `prev-${reason}`,
+      until: Date.now() + BAN_TTL
+    });
+  }
+
+  const pnlSOL=parseFloat(((exitPrice-pos.entryPrice)/pos.entryPrice*pos.size).toFixed(4));
+  const pnlPct=((exitPrice-pos.entryPrice)/pos.entryPrice)*100;
   const durS=Math.floor((Date.now()-pos.entryTime)/1000);
   wallet=parseFloat((wallet+pos.size+pnlSOL).toFixed(4));
   if(pnlSOL>0)wins++;else losses++;
   pnlCurve.push(parseFloat((pnlCurve[pnlCurve.length-1]+pnlSOL).toFixed(4)));
   if(pnlCurve.length>60)pnlCurve.shift();
-  history.unshift({...pos,exitPrice:pos.currentPrice,pnlSOL,pnlPct,reason,durS});
+  history.unshift({...pos,exitPrice,pnlSOL,pnlPct,reason,durS});
   if(history.length>50)history.pop();
   const icons={TP:'✅',SL:'🔴',TRAIL:'🟡',MANUAL:'⬛'};
   addLog(pnlSOL>0?'tp':'sl',icons[reason]||'⬛',
@@ -1256,14 +1370,15 @@ function reconnectWSS(){connectWSS();}
 function resetAll(){
   if(!confirm('Reset semua data paper trading?')) return;
   positions=[];history=[];pnlCurve=[0];feedItems=[];elogs=[];wssEvents=[];
-  wallet=10;wins=0;losses=0;totalTrades=0;autoTrades=0;manualTrades=0;
+  wallet=1;wins=0;losses=0;totalTrades=0;autoTrades=0;manualTrades=0;
   scannedCount=0;filteredCount=0;skipCount=0;poolInits=0;abCount=0;
   wssEventCount=0;wssTriggers=0;seenPairs=new Set();
+  seenMints=new Map(); bannedMints=new Map();
   Object.keys(dexActivity).forEach(k=>{dexActivity[k]={events:0,inits:0,lastEvent:0};});
   document.getElementById('abCount').textContent='0 trades';
   localStorage.removeItem(LS_KEY);
   renderPositions();renderHistory();renderFeed();renderDexGrid();updateStats();updChart();
-  addLog('info','🔄','Reset. Virtual wallet: 10 SOL');
+  addLog('info','🔄','Reset. Virtual wallet: 1 SOL · trade size 0.1 SOL');
 }
 
 // ══════════════════════════════════════════════════════
@@ -1307,6 +1422,13 @@ setInterval(()=>renderFeed(), 10000);
 setInterval(()=>renderDexGrid(), 2000);
 // Auto-save every 30s
 setInterval(()=>saveState(), 30000);
+
+// Cleanup expired entries (TTL) — supaya Map nggak unbounded growth
+setInterval(()=>{
+  const now = Date.now();
+  for(const [m, t] of seenMints){ if(now - t > SEEN_MINT_TTL) seenMints.delete(m); }
+  for(const [m, b] of bannedMints){ if(now > b.until) bannedMints.delete(m); }
+}, 60000);
 
 // Connect WSS
 connectWSS();
